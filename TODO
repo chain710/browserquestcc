@@ -1,0 +1,5 @@
+refine websocket pack wrapper
+introduce exception, kickplayer when fatal
+
+active mob list, process in tick(if it should abandon current action and return to idle)
+
