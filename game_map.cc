@@ -56,13 +56,14 @@ void game_map_t::create_from( const map_config_t& map )
     zone_v_num_ = map_h_ / ZONE_HEIGHT;
     if (map_h_ % ZONE_HEIGHT > 0) ++zone_v_num_;
 
+    zone_.init(map_w_, map_h_, 16, 4, 4);
+    set_move_event_radius(15);
+
     const map_config_t::entities_t &e = map.get_entities();
     for (map_config_t::entities_t::const_iterator it = e.begin(); it != e.end(); ++it)
     {
         spawn(*it);
     }
-
-    //zones2_.init();
 
     L_DEBUG("create map %d*%d, zone %d*%d, spawn %zu entities", 
         map_w_, map_h_, zone_h_num_, zone_v_num_, entities_.size());
@@ -131,41 +132,7 @@ bool game_map_t::is_valid_coord( int x, int y )
 int game_map_t::move_entity( game_entity_t& e, int x, int y, move_events_t* evts)
 {
     // TODO: check collision
-    // remove from previous zone
-    /*
-    int src_zone_id = get_zone_id(e.x(), e.y());
-    int dst_zone_id = get_zone_id(x, y);
-    int ret = 0;
-    if (dst_zone_id != src_zone_id)
-    {
-        entity_map_t::iterator it = zones_[src_zone_id].find(e.id());
-        if (it == zones_[src_zone_id].end())
-        {
-            L_ERROR("find no entity %d in zone %d", e.id(), src_zone_id);
-            return -1;
-        }
-        
-        game_entity_t* src = it->second;
-        it = zones_[dst_zone_id].find(e.id());
-        if (it != zones_[dst_zone_id].find(e.id()))
-        {
-            L_ERROR("find dup entity %d in zone %d and %d", e.id(), src_zone_id, dst_zone_id);
-            return -1;
-        }
-        
-        zones_[src_zone_id].erase(e.id());
-        zones_[dst_zone_id][e.id()] = src;
-        L_DEBUG("entity %d move from zone %d to %d", 
-            e.id(), src_zone_id, dst_zone_id);
-        ret = 1;
-    }
-    
-    e.set_position(x, y);
-    */
-    //////////////////////////////////////////////////////////////////////////
     return zone_.move(&e, x, y, region_tree_t::overlap_detector_t(is_overlap, &event_radius_), evts);
-
-    //return ret;
 }
 
 void game_map_t::tileidx2coord( int tile_idx, int* x, int* y ) const
@@ -190,41 +157,7 @@ void game_map_t::tileidx2coord( int tile_idx, int* x, int* y ) const
 
 void game_map_t::get_adjacent_entities( int x, int y, entity_filter_t filter, entity_list_t* out )
 {
-    region_tree_t::overlap_detector_t detector;
-    detector.func_ = is_overlap;
-    detector.param_ = &event_radius_;
-    region_tree_t::entities_t entities;
-    zone_.get_neighbours(x, y, detector, filter, out);
-    /*
-    return;
-
-    coordinate_t z = get_zone_coord(x, y);
-
-    int az[][2] = {
-        {z.x_-1, z.y_-1}, {z.x_, z.y_-1}, {z.x_+1, z.y_-1},
-        {z.x_-1, z.y_}, {z.x_, z.y_}, {z.x_+1, z.y_},
-        {z.x_-1, z.y_+1}, {z.x_, z.y_+1}, {z.x_+1, z.y_+1},
-    };
-
-    int zone_id;
-    for (int i = 0; i < 9; ++i)
-    {
-        zone_id = az[i][1]*zone_v_num_+az[i][0];
-        entities_map_t::const_iterator it = zones_.find(zone_id);
-        if (it == zones_.end())
-        {
-            continue;
-        }
-
-        for (entity_map_t::const_iterator j = it->second.begin(); j != it->second.end(); ++j)
-        {
-            if (filter && filter->f_(*(j->second), filter->up_))
-            {
-                (*out)[j->first] = j->second;
-            }
-        }
-    }
-    */
+    zone_.get_neighbours(x, y, region_tree_t::overlap_detector_t(is_overlap, &event_radius_), filter, out);
 }
 
 game_entity_t* game_map_t::get_entity( int id )
@@ -234,7 +167,6 @@ game_entity_t* game_map_t::get_entity( int id )
     {
         return NULL;
     }
-    
 
     return iter->second;
 }

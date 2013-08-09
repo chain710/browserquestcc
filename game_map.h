@@ -43,6 +43,7 @@ public:
     void get_adjacent_entities(int x, int y, entity_filter_t filter, entity_list_t* out);
     int population() const { return population_; }
     void set_target(character_t& e, int target);
+    void set_move_event_radius(int r) { event_radius_ = r; }
     // TODO: check all active mob
 private:
     // entities id->entity

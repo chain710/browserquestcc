@@ -330,7 +330,7 @@ void region_tree_t::get_neighbours( region_t& region, int dx, int dy,
 
     for (int i = 0; i < region_t::CHILDREN_SIZE; ++i)
     {
-        if (is_neaby_region.func_(dx, dy, region.children_[i], is_neighbour.param_))
+        if (is_neaby_region.func_(dx, dy, region.children_[i], is_neaby_region.param_))
         {
             get_neighbours(region.children_[i], dx, dy, is_neaby_region, is_neighbour, out);
         }

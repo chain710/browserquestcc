@@ -6,7 +6,7 @@ enum msg_id_t
     MSG_HELLO = 0,
     MSG_WELCOME = 1,
     MSG_SPAWN = 2,
-    MSG_DESPAWN = 3,
+    MSG_DESPAWN = 3,    // item looted, mob/player killed
     MSG_MOVE = 4,
     MSG_LOOTMOVE = 5,
     MSG_AGGRO = 6,
@@ -25,7 +25,7 @@ enum msg_id_t
     MSG_LIST = 19,
     MSG_WHO = 20,
     MSG_ZONE = 21,
-    MSG_DESTROY = 22,
+    MSG_DESTROY = 22,   // tell client to release some entity's resource
     MSG_HP = 23,    // max hp [msgid, maxhp], firepotion&equipitem
     MSG_BLINK = 24,
     MSG_OPEN = 25,

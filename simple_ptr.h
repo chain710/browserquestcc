@@ -77,6 +77,26 @@ public:
     {
         return size_;
     }
+
+    const T* operator->() const
+    {
+        return  ptr_;
+    }
+
+    T* operator->()
+    {
+        return  ptr_;
+    }
+    
+    const T& operator*()  const
+    {
+        return *ptr_;
+    }
+
+    T& operator*()
+    {
+        return *ptr_;
+    }
 private:
     simple_ptr(const simple_ptr&) {}
     simple_ptr& operator = (const simple_ptr&) {}

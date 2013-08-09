@@ -441,12 +441,21 @@ int world_server_t::handle_hello( const msgpack_context_t& ctx, const Json::Valu
     // here is a workaround: broadcast list msg to nearby zones
     string_ptr entity_state;
     broadcast_nearby_players(*p, "[%d,%s]", MSG_SPAWN, p->get_state(entity_state));
+
+    // send nearby spawn to player
+    for (game_map_t::entity_list_t::iterator it = entities.begin(); it != entities.end(); ++it)
+    {
+        send_ws_text(ctx, "[%d,%s]", MSG_SPAWN, (*it)->get_state(entity_state));
+    }
+    
     return 0;
 }
 
 int world_server_t::handle_query_entities( const msgpack_context_t& ctx, const Json::Value& msg )
 {
+    L_TRACE("handle_query_entities deprecated!%s", "");
     // return entity info
+    /*
     int ids_len = msg.size();
     int id;
     game_entity_t* entity;
@@ -464,7 +473,7 @@ int world_server_t::handle_query_entities( const msgpack_context_t& ctx, const J
         }
         
         send_ws_text(ctx, "[%d,%s]", MSG_SPAWN, entity->get_state(entity_state));
-    }
+    }*/
     
     return 0;
 }
@@ -497,7 +506,7 @@ int world_server_t::handle_player_move( const msgpack_context_t& ctx, const Json
     // walk leave event
     string_ptr msg_buf;
     process_player_movement_events(*p, evts, 
-        pack_ws_text(msg_buf, "[%d,%d,%d,%d]", MSG_MOVE, p->id(), p->x(), p->y()));
+        pack_ws_text(msg_buf, "[%d,%d,%d,%d,0]", MSG_MOVE, p->id(), p->x(), p->y()));
     return 0;
 }
 
@@ -658,11 +667,14 @@ int world_server_t::handle_hit( const msgpack_context_t& ctx, const Json::Value&
     int dmg = 50;
 
     mob->recv_dmg(dmg);
-    on_character_hurt(*mob, *p, dmg);
-
-    // add mob to active list
-    map_.set_target(*mob, p->id());
-    broadcast_nearby_players(*mob, "[%d,%d,%d]", MSG_ATTACK, mob_id, p->id());
+    int ret = on_character_hurt(*mob, *p, dmg);
+    if (0 == ret)
+    {
+        // add mob to active list
+        map_.set_target(*mob, p->id());
+        broadcast_nearby_players(*mob, "[%d,%d,%d]", MSG_ATTACK, mob_id, p->id());
+    }
+    
     // mob recvdmg(-dmg)
     // handleMobHate
         // increase mob hate
@@ -703,16 +715,20 @@ int world_server_t::handle_hurt( const msgpack_context_t& ctx, const Json::Value
 
     if (!mob->is_in_pos(mob_x, mob_y))
     {
-        // TODO: move error?
         game_map_t::move_events_t evts;
         ret = map_.move_entity(*mob, mob_x, mob_y, &evts);
         if (ret < 0)
         {
+            L_ERROR("move mob %d to %d error %d", mob_id, mob_x, mob_y);
             return -1;
         }
 
-        // TODO: broadcast mob movement,walk all stay/enter players
+        process_mob_movement_events(*mob, evts);
     }
+
+    const int damage = 1;
+    p->recv_dmg(damage);
+    ret = on_character_hurt(*p, *mob, damage);
     
     return 0;
 }
@@ -996,8 +1012,11 @@ int world_server_t::on_character_hurt( character_t& victim, character_t& attacke
         case game_entity_t::EC_PLAYER:
             // remove player
             remove_player(*p);
-            // mob choose another target
-            // NOTE: whem mob move, broadcast move msg(only used in returntospawn pos now)
+            attacker.clear_target();
+            // TODO:mob choose another target
+
+            // notify attacker move and disengage
+            broadcast_nearby_players(attacker, "[%d,%d,%d,%d,0]", MSG_MOVE, attacker.id(), attacker.x(), attacker.y());
             break;
         case game_entity_t::EC_MOB:
             // push kill to player
@@ -1009,7 +1028,7 @@ int world_server_t::on_character_hurt( character_t& victim, character_t& attacke
             // DONT BREAK, FALL THROUGHT HERE!
         default:
             map_.destory_entity(victim.id());
-            break;
+            return 1;
         }
     }
 
@@ -1024,15 +1043,39 @@ int world_server_t::on_player_leave_mob_region( player_t& player, mob_t& mob )
 
 void world_server_t::process_player_movement_events( const player_t& player, const game_map_t::move_events_t& evts, const slice_t& msg )
 {
+    string_ptr destroy_msgbuf, spawn_msgbuf;
+    slice_t destroy_msg, spawn_msg;
     for (game_map_t::move_events_t::const_iterator i = evts.begin(); i != evts.end(); ++i)
     {
         if (game_entity_t::EC_PLAYER == i->entity_->category())
         {
             player_t* p = dynamic_cast<player_t*>(i->entity_);
-            if (i->evt_ == region_tree_t::REVT_ENTER
-                || i->evt_ == region_tree_t::REVT_STAY)
+            switch (i->evt_)
             {
+            case region_tree_t::REVT_ENTER:
+                if (spawn_msg.empty())
+                {
+                    string_ptr state_buf;
+                    spawn_msg = pack_ws_text(spawn_msgbuf, "[%d,%s]", MSG_SPAWN, player.get_state(state_buf));
+                }
+                
+                send_raw(p->msgctx(), spawn_msg.data(), spawn_msg.size());
+                break;
+            case region_tree_t::REVT_STAY:
                 send_raw(p->msgctx(), msg.data(), msg.size());
+                break;
+            case region_tree_t::REVT_LEAVE:
+                // send destory msg when leave, save client memory
+                if (destroy_msg.empty())
+                {
+                    destroy_msg = pack_ws_text(destroy_msgbuf, "[%d,%d]", MSG_DESTROY, player.id());
+                }
+                
+                send_raw(p->msgctx(), destroy_msg.data(), destroy_msg.size());
+                break;
+            default:
+                L_ERROR("unknown player movement event %u", i->evt_);
+                break;
             }
         }
         else if (game_entity_t::EC_MOB == i->entity_->category())
@@ -1040,8 +1083,71 @@ void world_server_t::process_player_movement_events( const player_t& player, con
             mob_t* mob = dynamic_cast<mob_t*>(i->entity_);
             if (i->evt_ == region_tree_t::REVT_LEAVE && mob->target() == player.id())
             {
-                // TODO: broadcast nearby players, give up chasing
+                // TODO: broadcast nearby players(mob movement), give up chasing
                 L_WARN("mob %d should clear target %d now!", mob->id(), player.id());
+            }
+        }
+
+        // NOTE: how to prevent frequent leaving/entering?
+        switch (i->evt_)
+        {
+        case region_tree_t::REVT_LEAVE:
+            {
+                string_ptr leave_msgbuf;
+                slice_t leave_msg = pack_ws_text(leave_msgbuf, "[%d,%d]", MSG_DESTROY, i->entity_->id());
+                send_raw(player.msgctx(), leave_msg.data(), leave_msg.size());
+            }
+            break;
+        case region_tree_t::REVT_ENTER:
+            {
+                string_ptr enter_msgbuf, state_buf;
+                slice_t enter_msg = pack_ws_text(enter_msgbuf, "[%d,%s]", MSG_SPAWN, i->entity_->get_state(state_buf));
+                send_raw(player.msgctx(), enter_msg.data(), enter_msg.size());
+            }
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+void world_server_t::process_mob_movement_events( const mob_t& mob, const game_map_t::move_events_t& evts )
+{
+    string_ptr move_msgbuf, destroy_msgbuf, spawn_msgbuf;
+    slice_t move_msg = pack_ws_text(move_msgbuf, "[%d,%d,%d,%d,1]", MSG_MOVE, mob.id(), mob.x(), mob.y());
+    slice_t destroy_msg;
+    slice_t spawn_msg;
+
+    for (game_map_t::move_events_t::const_iterator i = evts.begin(); i != evts.end(); ++i)
+    {
+        if (game_entity_t::EC_PLAYER == i->entity_->category())
+        {
+            player_t* p = dynamic_cast<player_t*>(i->entity_);
+            switch (i->evt_)
+            {
+            case region_tree_t::REVT_ENTER:
+                if (spawn_msg.empty())
+                {
+                    string_ptr state_buf;
+                    spawn_msg = pack_ws_text(spawn_msgbuf, "[%d,%s]", MSG_SPAWN, mob.get_state(state_buf));
+                }
+                
+                send_raw(p->msgctx(), spawn_msg.data(), spawn_msg.size());
+                break;
+            case region_tree_t::REVT_STAY:
+                send_raw(p->msgctx(), move_msg.data(), move_msg.size());
+                break;
+            case region_tree_t::REVT_LEAVE:
+                if (destroy_msg.empty())
+                {
+                    destroy_msg = pack_ws_text(destroy_msgbuf, "[%d,%d]", MSG_DESTROY, mob.id());
+                }
+                
+                send_raw(p->msgctx(), destroy_msg.data(), destroy_msg.size());
+                break;
+            default:
+                L_ERROR("unknown mob movement event %u", i->evt_);
+                break;
             }
         }
     }

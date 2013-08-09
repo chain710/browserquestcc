@@ -69,12 +69,13 @@ private:
 
     // send msg to stay/enter entities, clear leave entity's target
     void process_player_movement_events(const player_t& player, const game_map_t::move_events_t& evts, const slice_t& msg);
+    void process_mob_movement_events(const mob_t& mob, const game_map_t::move_events_t& evts);
 
     // broadcast player movement to adjacent zones
     void broadcast_nearby_players(const game_entity_t& src, const char* fmt, ...);
 
     //////////////////////////////////////////////////////////////////////////
-
+    // return 1 if entity is dead, 0 if ok, <0 if error
     int on_character_hurt( character_t& entity, character_t& attacker, int dmg );
 
     // check if msg valid
