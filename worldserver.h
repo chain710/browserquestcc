@@ -46,9 +46,9 @@ private:
     int handle_teleport(const msgpack_context_t& ctx, const Json::Value& msg);
     // player's zone changed
     int handle_zone_changed(const msgpack_context_t& ctx, const Json::Value& msg);
-    // handle engagement
-    //int handle_aggro(const msgpack_context_t& ctx, const Json::Value& msg);
+    // player engage
     int handle_attack(const msgpack_context_t& ctx, const Json::Value& msg);
+    // player hit mob
     int handle_hit(const msgpack_context_t& ctx, const Json::Value& msg);
     // handle lootmove
     int handle_lootmove(const msgpack_context_t& ctx, const Json::Value& msg);
@@ -56,6 +56,12 @@ private:
     int handle_loot(const msgpack_context_t& ctx, const Json::Value& msg);
     // mob attack player
     int handle_hurt(const msgpack_context_t& ctx, const Json::Value& msg);
+    // player chat msg
+    int handle_chat(const msgpack_context_t& ctx, const Json::Value& msg);
+    // open chest
+    int handle_open_chest(const msgpack_context_t& ctx, const Json::Value& msg);
+    // mob hate
+    int handle_aggro(const msgpack_context_t& ctx, const Json::Value& msg);
     // just a stub
     int handle_no_implemenation(const msgpack_context_t& ctx, const Json::Value& msg);
 
@@ -71,13 +77,18 @@ private:
     void process_player_movement_events(const player_t& player, const game_map_t::move_events_t& evts, const slice_t& msg);
     void process_mob_movement_events(const mob_t& mob, const game_map_t::move_events_t& evts);
 
+    // drop item at x,y
+    void drop_item_at( int category, int kind, int x, int y );
+
     // broadcast player movement to adjacent zones
     void broadcast_nearby_players(const game_entity_t& src, const char* fmt, ...);
+    void broadcast_region_players( const game_entity_t& src, const char* fmt, ... );
+    void vbroadcast_to_entities( const game_map_t::entity_list_t& entities, const char* fmt, va_list ap );
 
     //////////////////////////////////////////////////////////////////////////
     // return 1 if entity is dead, 0 if ok, <0 if error
     int on_character_hurt( character_t& entity, character_t& attacker, int dmg );
-
+    int on_player_move( player_t& player, int x, int y );
     // check if msg valid
     bool validate_msg(const Json::Value& msg);
     // check msg data field type
@@ -103,6 +114,9 @@ private:
     app_init_option app_opt_;
     // linkctx to playerid
     std::map<int, int> players_;
+
+    time_t last_spawn_mob_time_;
+    time_t now_;
 };
 
 #endif

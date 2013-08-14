@@ -293,12 +293,14 @@ void region_tree_t::move( region_t& region, game_entity_t* p,
     for (int i = 0; i < region_t::CHILDREN_SIZE; ++i)
     {
         new_event = 0;
-        if ((event & REVT_LEAVE) && is_overlap.func_(p->x(), p->y(), region.children_[i], is_overlap.param_))
+        if ((event & REVT_LEAVE) && (NULL == is_overlap.func_ 
+            || is_overlap.func_(p->x(), p->y(), region.children_[i], is_overlap.param_)))
         {
             new_event |= REVT_LEAVE;
         }
 
-        if ((event & REVT_ENTER) && is_overlap.func_(dx, dy, region.children_[i], is_overlap.param_))
+        if ((event & REVT_ENTER) && (NULL == is_overlap.func_ 
+            || is_overlap.func_(dx, dy, region.children_[i], is_overlap.param_)))
         {
             new_event |= REVT_ENTER;
         }
@@ -319,7 +321,7 @@ void region_tree_t::get_neighbours( region_t& region, int dx, int dy,
     {
         for (internal_node_t* i = region.head_; i != NULL; i = i->next_)
         {
-            if (is_neighbour.func_(*i->data_, is_neighbour.param_))
+            if (NULL == is_neighbour.func_ || is_neighbour.func_(*i->data_, is_neighbour.param_))
             {
                 out->push_back(i->data_);
             }
@@ -330,7 +332,7 @@ void region_tree_t::get_neighbours( region_t& region, int dx, int dy,
 
     for (int i = 0; i < region_t::CHILDREN_SIZE; ++i)
     {
-        if (is_neaby_region.func_(dx, dy, region.children_[i], is_neaby_region.param_))
+        if (NULL == is_neaby_region.func_ || is_neaby_region.func_(dx, dy, region.children_[i], is_neaby_region.param_))
         {
             get_neighbours(region.children_[i], dx, dy, is_neaby_region, is_neighbour, out);
         }

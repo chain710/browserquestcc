@@ -100,23 +100,28 @@ bool reject_by_player(const game_entity_t& e, void* up)
         e.id() != *(int*)up;
 }
 
+bool filter_mob_target(const game_entity_t& e, void* up)
+{
+    if (e.category() != game_entity_t::EC_MOB)
+    {
+        return false;
+    }
+
+    const mob_t* mob = dynamic_cast<const mob_t*>(&e);
+    return mob->target() == *(int*)up;
+}
+
+int get_spawning_num(const spawning_area_t& area, int mob_num, void* up)
+{
+    int max_num = (area.width_ * area.height_)/9;
+    if (mob_num >= max_num)
+    {
+        return 0;
+    }
+
+    return 3;
+}
 //////////////////////////////////////////////////////////////////////////
-
-// template <>
-// size_t IterDataSize(const game_map_t::entity_map_t::iterator& iter)
-// {
-//     // asumption
-//     return 4;
-// }
-// 
-// template <>
-// std::string IterData(const game_map_t::entity_map_t::iterator& iter)
-// {
-//     char tmp[16];
-//     snprintf(tmp, sizeof(tmp), "%d", iter->second->id());
-//     return string(tmp);
-// }
-
 template <>
 size_t IterDataSize(const game_map_t::entity_list_t::iterator& iter)
 {
@@ -134,7 +139,9 @@ std::string IterData(const game_map_t::entity_list_t::iterator& iter)
 
 
 world_server_t::world_server_t( app_init_option opt ):
-    app_opt_(opt)
+    app_opt_(opt), 
+    last_spawn_mob_time_(0), 
+    now_(time(NULL))
 {
 }
 
@@ -222,9 +229,25 @@ int world_server_t::handle_message( const msgpack_context_t& ctx, const char* da
 
 void world_server_t::handle_tick()
 {
-    // TODO: timer check
+    now_ = time(NULL);
+    if (now_ - last_spawn_mob_time_ >= 15)
+    {
+        last_spawn_mob_time_ = now_;
+        game_map_t::entity_list_t mobs = map_.spawn_mobs(game_map_t::spawning_counter_t(get_spawning_num, NULL));
+        
+        if (!mobs.empty())
+        {
+            L_DEBUG("spaning %zu mob(s)", mobs.size());
+            string_ptr state_buf;
+            game_entity_t* e;
+            for (game_map_t::entity_list_t::iterator it = mobs.begin(); it != mobs.end(); ++it)
+            {
+                e = *it;
+                broadcast_nearby_players(*e, "[%d,%s]", MSG_SPAWN, e->get_state(state_buf));
+            }
+        }
 
-    // check all active mob if target out of range?
+    }
 }
 
 bool world_server_t::validate_msg( const Json::Value& msg )
@@ -337,9 +360,9 @@ int world_server_t::dispatch_msg( const msgpack_context_t& ctx, const Json::Valu
     case MSG_ATTACK: return handle_attack(ctx, msg);
     case MSG_HIT: return handle_hit(ctx, msg);
     case MSG_HURT: return handle_hurt(ctx, msg);
-    case MSG_CHAT:
-    case MSG_AGGRO:
-    case MSG_OPEN:
+    case MSG_CHAT: return handle_chat(ctx, msg);
+    case MSG_OPEN: return handle_open_chest(ctx, msg);
+    case MSG_AGGRO: return handle_aggro(ctx, msg);
     default: return handle_no_implemenation(ctx, msg);
     }
 }
@@ -454,27 +477,6 @@ int world_server_t::handle_hello( const msgpack_context_t& ctx, const Json::Valu
 int world_server_t::handle_query_entities( const msgpack_context_t& ctx, const Json::Value& msg )
 {
     L_TRACE("handle_query_entities deprecated!%s", "");
-    // return entity info
-    /*
-    int ids_len = msg.size();
-    int id;
-    game_entity_t* entity;
-    string_ptr entity_state;
-
-    for (int i = 1; i < ids_len; ++i)
-    {
-        id = msg[i].asInt();
-        L_DEBUG("player request entity %d info", id);
-        entity = map_.get_entity(id);
-        if (NULL == entity)
-        {
-            L_WARN("find no entity %d", id);
-            continue;
-        }
-        
-        send_ws_text(ctx, "[%d,%s]", MSG_SPAWN, entity->get_state(entity_state));
-    }*/
-    
     return 0;
 }
 
@@ -490,24 +492,7 @@ int world_server_t::handle_player_move( const msgpack_context_t& ctx, const Json
         return -1;
     }
     
-    L_DEBUG("player %d move to (%d,%d)", p->id(), x, y);
-    game_map_t::move_events_t evts;
-    int ret = map_.move_entity(*p, x, y, &evts);
-    if (ret < 0)
-    {
-        // error, TODO: disconnect player
-        return -1;
-    }
-    else
-    {
-        p->clear_target();
-    }
-
-    // walk leave event
-    string_ptr msg_buf;
-    process_player_movement_events(*p, evts, 
-        pack_ws_text(msg_buf, "[%d,%d,%d,%d,0]", MSG_MOVE, p->id(), p->x(), p->y()));
-    return 0;
+    return on_player_move(*p, x, y);
 }
 
 int world_server_t::handle_checkpoint( const msgpack_context_t& ctx, const Json::Value& msg )
@@ -541,8 +526,31 @@ int world_server_t::handle_player_disconnect( const msgpack_context_t& ctx )
 
 int world_server_t::handle_teleport( const msgpack_context_t& ctx, const Json::Value& msg )
 {
-    // TODO: handleplayervanish -> make mob forget player, return to spawning pos
-    return handle_player_move(ctx, msg);
+    int x = msg[1].asInt();
+    int y = msg[2].asInt();
+    player_t* p = get_player_by_link(ctx);
+    if (NULL == p)
+    {
+        L_ERROR("find no player by link(%d)", ctx.link_ctx_);
+        return -1;
+    }
+
+    L_DEBUG("player %d teleport to (%d,%d)", p->id(), x, y);
+
+    int self_id = p->id();
+    game_map_t::entity_list_t entities;
+    map_.get_adjacent_entities(p->x(), p->y(), game_map_t::entity_filter_t(filter_mob_target, &self_id), &entities);
+
+    // make mob to forget player
+    mob_t* mob;
+    for (game_map_t::entity_list_t::iterator i = entities.begin(); i != entities.end(); ++i)
+    {
+        mob = dynamic_cast<mob_t*>(*i);
+        mob->clear_target();
+        broadcast_nearby_players(*mob, "[%d,%d,%d,%d,0]", MSG_MOVE, mob->id(), mob->x(), mob->y());
+    }
+    
+    return on_player_move(*p, x, y);
 }
 
 int world_server_t::handle_zone_changed( const msgpack_context_t& ctx, const Json::Value& msg )
@@ -557,10 +565,7 @@ int world_server_t::handle_zone_changed( const msgpack_context_t& ctx, const Jso
     }
     
     int playerid = p->id();
-    //game_map_t::entity_map_t entities;
-    //sgame_map_t::entity_filter_t reject_self_id(reject_by_id, &playerid);
     game_map_t::entity_list_t entities;
-    //map_.get_adjacent_entities(p->x(), p->y(), &entities, &reject_self_id);
     map_.get_adjacent_entities(p->x(), p->y(), game_map_t::entity_filter_t(reject_by_id, &playerid), &entities);
     if (!entities.empty())
     {
@@ -768,12 +773,12 @@ int world_server_t::handle_loot( const msgpack_context_t& ctx, const Json::Value
     switch (category)
     {
     case game_entity_t::EC_ARMOR:
-        p->set_armor(loot_id);
+        p->set_armor(kind);
         broadcast_nearby_players(*p, "[%d,%d,%d]", MSG_EQUIP, p->id(), kind);
         // TODO: modify hp
         break;
     case game_entity_t::EC_WEAPON:
-        p->set_weapon(loot_id);
+        p->set_weapon(kind);
         broadcast_nearby_players(*p, "[%d,%d,%d]", MSG_EQUIP, p->id(), kind);
         break;
     case game_entity_t::EC_OBJECT:
@@ -805,6 +810,86 @@ int world_server_t::handle_loot( const msgpack_context_t& ctx, const Json::Value
         break;
     }
 
+    return 0;
+}
+
+int world_server_t::handle_chat( const msgpack_context_t& ctx, const Json::Value& msg )
+{
+    string chat_msg = msg[1].asString();
+    // TODO: sanitize(chat_msg)
+    player_t* p = get_player_by_link(ctx);
+    if (NULL == p)
+    {
+        L_ERROR("find no player by link %d", ctx.link_ctx_);
+        return -1;
+    }
+    
+    L_INFO("player %d send chat msg %s", p->id(), chat_msg.c_str());
+    if (chat_msg.empty())
+    {
+        return 0;
+    }
+    
+    broadcast_region_players(*p, "[%d,%d,\"%s\"]", MSG_CHAT, p->id(), chat_msg.c_str());
+    return 0;
+}
+
+int world_server_t::handle_open_chest( const msgpack_context_t& ctx, const Json::Value& msg )
+{
+    int chestid = msg[1].asInt();
+    player_t* p = get_player_by_link(ctx);
+    if (NULL == p)
+    {
+        L_ERROR("find no player by link %d", ctx.link_ctx_);
+        return -1;
+    }
+    
+    L_INFO("player %d open chest %d", p->id(), chestid);
+
+    game_entity_t* chest = map_.get_entity(chestid);
+    if (NULL == chest)
+    {
+        L_ERROR("find no chest %d", chestid);
+        return -1;
+    }
+
+    int cx = chest->x(), 
+        cy = chest->y();
+    // broadcast chest despawn
+    broadcast_nearby_players(*chest, "[%d,%d]", MSG_DESPAWN, chestid);
+    // remove entity
+    map_.destory_entity(chestid);
+    // TODO: random item
+    drop_item_at(game_entity_t::EC_WEAPON, game_entity_t::GOLDENSWORD, cx, cy);
+    return 0;
+}
+
+int world_server_t::handle_aggro( const msgpack_context_t& ctx, const Json::Value& msg )
+{
+    int mob_id = msg[1].asInt();
+    player_t* p = get_player_by_link(ctx);
+    if (NULL == p)
+    {
+        L_ERROR("find no player by link %d", ctx.link_ctx_);
+        return -1;
+    }
+    
+    L_DEBUG("player %d hated by mob %d", p->id(), mob_id);
+    mob_t* mob = dynamic_cast<mob_t*>(map_.get_entity(mob_id));
+    if (NULL == mob)
+    {
+        L_ERROR("find no mob %d", mob_id);
+        return -1;
+    }
+    
+    if (!mob->has_target())
+    {
+        mob->set_target(p->id());
+        // broadcast attack
+        broadcast_nearby_players(*mob, "[%d,%d,%d]", MSG_ATTACK, mob_id, p->id());
+        // TODO: move to nearby position?
+    }
+    
     return 0;
 }
 
@@ -917,26 +1002,42 @@ void world_server_t::broadcast_nearby_players( const game_entity_t& src, const c
     int src_id = src.id();
     game_map_t::entity_list_t entities;
     map_.get_adjacent_entities(src.x(), src.y(), game_map_t::entity_filter_t(reject_by_player, &src_id), &entities);
-    if (!entities.empty())
-    {
-        string_ptr str;
-        va_list ap;
-        va_start(ap, fmt);
-        slice_t slice = vpack_ws_text(str, fmt, ap);
-        va_end(ap);
+    va_list ap;
+    va_start(ap, fmt);
+    vbroadcast_to_entities(entities, fmt, ap);
+    va_end(ap);
+}
 
-        player_t *p;
-        for (game_map_t::entity_list_t::const_iterator iter = entities.begin(); iter != entities.end(); ++iter)
+void world_server_t::broadcast_region_players( const game_entity_t& src, const char* fmt, ... )
+{
+    game_map_t::entity_list_t entities;
+    map_.get_adjacent_entities(src.x(), src.y(), game_map_t::entity_filter_t(NULL, NULL), &entities);
+    va_list ap;
+    va_start(ap, fmt);
+    vbroadcast_to_entities(entities, fmt, ap);
+    va_end(ap);
+}
+
+void world_server_t::vbroadcast_to_entities( const game_map_t::entity_list_t& entities, const char* fmt, va_list ap )
+{
+    if (entities.empty())
+    {
+        return;
+    }
+
+    string_ptr str;
+    slice_t slice = vpack_ws_text(str, fmt, ap);
+    player_t *p;
+    for (game_map_t::entity_list_t::const_iterator iter = entities.begin(); iter != entities.end(); ++iter)
+    {
+        p = dynamic_cast<player_t*>(*iter);
+        if (NULL == p)
         {
-            p = dynamic_cast<player_t*>(*iter);
-            if (NULL == p)
-            {
-                L_WARN("player %d is null, data might be corrupted", (*iter)->id());
-                continue;
-            }
-            
-            send_raw(p->msgctx(), slice.data(), slice.size());
+            L_WARN("player %d is null, data might be corrupted", (*iter)->id());
+            continue;
         }
+
+        send_raw(p->msgctx(), slice.data(), slice.size());
     }
 }
 
@@ -1010,10 +1111,9 @@ int world_server_t::on_character_hurt( character_t& victim, character_t& attacke
         switch (victim.category())
         {
         case game_entity_t::EC_PLAYER:
-            // remove player
+            // remove player, clear attacker's target
             remove_player(*p);
             attacker.clear_target();
-            // TODO:mob choose another target
 
             // notify attacker move and disengage
             broadcast_nearby_players(attacker, "[%d,%d,%d,%d,0]", MSG_MOVE, attacker.id(), attacker.x(), attacker.y());
@@ -1085,6 +1185,8 @@ void world_server_t::process_player_movement_events( const player_t& player, con
             {
                 // TODO: broadcast nearby players(mob movement), give up chasing
                 L_WARN("mob %d should clear target %d now!", mob->id(), player.id());
+                mob->clear_target();
+                broadcast_nearby_players(*mob, "[%d,%d,%d,%d,0]", MSG_MOVE, mob->id(), mob->x(), mob->y());
             }
         }
 
@@ -1151,4 +1253,42 @@ void world_server_t::process_mob_movement_events( const mob_t& mob, const game_m
             }
         }
     }
+}
+
+int world_server_t::on_player_move( player_t& player, int x, int y )
+{
+    L_DEBUG("player %d move to (%d,%d)", player.id(), x, y);
+    game_map_t::move_events_t evts;
+    int ret = map_.move_entity(player, x, y, &evts);
+    if (ret < 0)
+    {
+        // error, TODO: disconnect player?
+        return -1;
+    }
+    else
+    {
+        player.clear_target();
+    }
+
+    // walk leave event
+    string_ptr msg_buf;
+    process_player_movement_events(player, evts, 
+        pack_ws_text(msg_buf, "[%d,%d,%d,%d,0]", MSG_MOVE, player.id(), player.x(), player.y()));
+    return 0;
+}
+
+void world_server_t::drop_item_at( int category, int kind, int x, int y )
+{
+    game_entity_t prototype;
+    prototype.init(0, kind, category);
+    prototype.set_position(x, y);
+    game_entity_t* item = map_.spawn(prototype);
+    if (NULL == item)
+    {
+        L_ERROR("spawn item(%d, %d) at (%d, %d) failed", category, kind, x, y);
+        return;
+    }
+    
+    string_ptr state_buf;
+    broadcast_nearby_players(*item, "[%d,%s]", MSG_SPAWN, item->get_state(state_buf));
 }

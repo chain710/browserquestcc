@@ -21,6 +21,9 @@ public:
     typedef region_tree_t::move_events_t move_events_t;
     typedef region_tree_t::entities_t entity_list_t;
     typedef region_tree_t::neighbour_filter_t entity_filter_t;
+    typedef map_config_t::spawning_areas_t spawning_areas_t;
+    typedef map_config_t::collision_tileidxs_t collisions_t;
+    typedef func_tuple_t<int(*)(const spawning_area_t&, int, void*)> spawning_counter_t;
 
     game_map_t();
     ~game_map_t();
@@ -38,20 +41,26 @@ public:
     game_entity_t* get_entity(int id);
     // get entities in group
     int generate_id() { return ++max_id_; }
-    void tileidx2coord( int tile_idx, int* x, int* y ) const;
+    int coord2tileidx(int x, int y) const;
     // get nearby entities
     void get_adjacent_entities(int x, int y, entity_filter_t filter, entity_list_t* out);
     int population() const { return population_; }
     void set_target(character_t& e, int target);
     void set_move_event_radius(int r) { event_radius_ = r; }
+    game_map_t::entity_list_t spawn_mobs(spawning_counter_t counter);
+
     // TODO: check all active mob
 private:
+    void random_coord(const spawning_area_t& area, int* x, int* y);
+
     // entities id->entity
     entity_map_t entities_;
     region_tree_t zone_;
     // active mob list? ai/actions
     std::map<int, mob_t*> active_mobs_;
 
+    collisions_t collsions_;
+    spawning_areas_t mob_areas_;
 
     int max_id_;
 

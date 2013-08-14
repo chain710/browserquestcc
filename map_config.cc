@@ -80,6 +80,7 @@ map_config_t::map_config_t():
 
 int map_config_t::load( const char* config_path )
 {
+    // TODO: read roamingAreas(mob areas), grid(map.collisions)
     Json::Reader reader;
     Json::Value root;
 
@@ -102,9 +103,10 @@ int map_config_t::load( const char* config_path )
     
     Json::Value& static_chests = root["staticChests"];
     Json::Value& static_entities = root["staticEntities"];
+    Json::Value& mob_areas = root["roamingAreas"];
+    Json::Value& collisions = root["collisions"];
 
     game_entity_t tmp;
-
     for (Json::Value::ArrayIndex i = 0; i < static_chests.size(); ++i)
     {
         tmp.init(0, game_entity_t::CHEST, game_entity_t::EC_OBJECT);
@@ -134,6 +136,31 @@ int map_config_t::load( const char* config_path )
 
         entities_.push_back(tmp);
     }
+
+    for (Json::Value::ArrayIndex i = 0; i < collisions.size(); ++i)
+    {
+        collisions_.insert(collisions[i].asInt());
+    }
+
+    // mob spawning area
+    for (Json::Value::ArrayIndex i = 0; i < mob_areas.size(); ++i)
+    {
+        const char* type = mob_areas[i]["type"].asCString();
+        kind_info = get_kind_info(type);
+        if (NULL == kind_info)
+        {
+            L_ERROR("find no kind info by %s", type);
+            continue;
+        }
+        
+        mob_areas_.push_back(spawning_area_t(
+            mob_areas[i].get("x", 0).asInt(), 
+            mob_areas[i].get("y", 0).asInt(),
+            mob_areas[i].get("width", 0).asInt(),
+            mob_areas[i].get("height", 0).asInt(), 
+            kind_info->kind_, 
+            kind_info->category_));
+    }
     
     L_DEBUG("load %zu entities", entities_.size());
     return 0;
@@ -141,7 +168,7 @@ int map_config_t::load( const char* config_path )
 
 void map_config_t::tileidx2coord( int tile_idx, int* x, int* y )
 {
-    // x starts from 1, y starts from 0
+    // x starts from 1, y starts from 0, tile_idx starts from 1
     if (x)
     {
         if (tile_idx <= 0)
