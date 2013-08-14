@@ -27,6 +27,6 @@ Protocol modification
 * Client to server
     * HURT: [msgid, mobid, x, y], add x and y, so server-side can update mob position when it attacks player
 
-client-side modification
+Client-side modification
 ------------------------
 * Update character's target even if it already exists when handling spawn message
